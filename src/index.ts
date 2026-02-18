@@ -25,6 +25,16 @@ if (subcommand && await runCli(subcommand)) {
 // MCP server mode (default)
 const config = loadConfig();
 
+// Startup diagnostics (visible in Claude Code MCP server logs via stderr)
+import { existsSync } from "fs";
+import { CONFIG_FILE } from "./config.js";
+console.error(`[affine-mcp] Config: ${CONFIG_FILE} (${existsSync(CONFIG_FILE) ? 'found' : 'missing'})`);
+console.error(`[affine-mcp] Endpoint: ${config.baseUrl}${config.graphqlPath}`);
+console.error(`[affine-mcp] Auth: ${config.apiToken ? 'token ' + config.apiToken.slice(0, 10) + '...' : 'none'}`);
+console.error(`[affine-mcp] Cookie: ${config.cookie ? config.cookie.slice(0, 20) + '...' : 'none'}`);
+console.error(`[affine-mcp] Email: ${config.email || '(none)'}`);
+console.error(`[affine-mcp] Workspace: ${config.defaultWorkspaceId || '(none)'}`);
+
 async function buildServer() {
   const server = new McpServer({ name: "affine-mcp", version: "1.5.0" });
 
