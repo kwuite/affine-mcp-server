@@ -183,12 +183,19 @@ async function login() {
   const defaultUrl = "https://app.affine.pro";
   const baseUrl = (await ask(`Affine URL [${defaultUrl}]: `)) || defaultUrl;
 
-  const method = await ask("\nAuth method — [1] Email/password (recommended)  [2] Paste API token: ");
+  const isSelfHosted = !baseUrl.includes("affine.pro");
   let result: { token: string; workspaceId: string };
-  if (method === "2") {
-    result = await loginWithToken(baseUrl);
+
+  if (isSelfHosted) {
+    const method = await ask("\nAuth method — [1] Email/password (recommended)  [2] Paste API token: ");
+    if (method === "2") {
+      result = await loginWithToken(baseUrl);
+    } else {
+      result = await loginWithEmail(baseUrl);
+    }
   } else {
-    result = await loginWithEmail(baseUrl);
+    // Cloudflare blocks programmatic sign-in on app.affine.pro — token is the only option
+    result = await loginWithToken(baseUrl);
   }
 
   writeConfigFile({
