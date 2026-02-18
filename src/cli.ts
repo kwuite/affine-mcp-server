@@ -66,9 +66,9 @@ async function login() {
   const baseUrl = (await ask(`Affine URL [${defaultUrl}]: `)) || defaultUrl;
 
   console.error("\nTo generate a token:");
-  console.error(`  1. Open ${baseUrl} in your browser`);
-  console.error("  2. Settings → Access Tokens → Generate New Token");
-  console.error("  3. Copy the token\n");
+  console.error(`  1. Open ${baseUrl}/settings in your browser`);
+  console.error("  2. Account Settings → Integrations → MCP Server");
+  console.error("  3. Copy the Personal access token\n");
 
   const token = await ask("API token: ", true);
   if (!token) {
@@ -88,21 +88,36 @@ async function login() {
   console.error("Detecting workspaces...");
   let workspaceId = "";
   try {
-    const data = await gql(baseUrl, token, "query { workspaces { id } }");
-    const ids: string[] = data.workspaces.map((w: any) => w.id);
-    if (ids.length === 0) {
+    const data = await gql(baseUrl, token, `query {
+      workspaces {
+        id createdAt memberCount
+        owner { name }
+        docs(first: 0) { totalCount }
+      }
+    }`);
+    const workspaces: any[] = data.workspaces;
+    if (workspaces.length === 0) {
       console.error("  No workspaces found.");
-    } else if (ids.length === 1) {
-      workspaceId = ids[0];
-      console.error(`  Found 1 workspace: ${workspaceId} (auto-selected)`);
     } else {
-      console.error(`  Found ${ids.length} workspaces:`);
-      ids.forEach((id, i) => console.error(`    ${i + 1}) ${id}`));
-      const choice = (await ask(`\nSelect [1]: `)) || "1";
-      workspaceId = ids[parseInt(choice, 10) - 1] || "";
-      if (!workspaceId) {
-        console.error("Invalid selection.");
-        process.exit(1);
+      const formatWs = (w: any) => {
+        const owner = w.owner?.name || "unknown";
+        const docs = w.docs?.totalCount ?? "?";
+        const date = w.createdAt ? new Date(w.createdAt).toLocaleDateString() : "";
+        return `${w.id}  (${docs} docs, by ${owner}, ${date})`;
+      };
+      if (workspaces.length === 1) {
+        workspaceId = workspaces[0].id;
+        console.error(`  Found 1 workspace: ${formatWs(workspaces[0])}`);
+        console.error("  Auto-selected.");
+      } else {
+        console.error(`  Found ${workspaces.length} workspaces:`);
+        workspaces.forEach((w, i) => console.error(`    ${i + 1}) ${formatWs(w)}`));
+        const choice = (await ask(`\nSelect [1]: `)) || "1";
+        workspaceId = workspaces[parseInt(choice, 10) - 1]?.id || "";
+        if (!workspaceId) {
+          console.error("Invalid selection.");
+          process.exit(1);
+        }
       }
     }
   } catch (err: any) {
