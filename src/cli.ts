@@ -2,6 +2,7 @@ import { fetch } from "undici";
 import * as fs from "fs";
 import * as readline from "readline";
 import { CONFIG_FILE, loadConfigFile, writeConfigFile } from "./config.js";
+import { loginWithPassword } from "./auth.js";
 
 function ask(prompt: string, hidden = false): Promise<string> {
   return new Promise((resolve) => {
@@ -29,20 +30,137 @@ function ask(prompt: string, hidden = false): Promise<string> {
   });
 }
 
-async function gql(baseUrl: string, token: string, query: string): Promise<any> {
+async function gql(baseUrl: string, auth: { token?: string; cookie?: string }, query: string, variables?: Record<string, any>): Promise<any> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "User-Agent": "affine-mcp-server/1.5.0",
+  };
+  if (auth.token) headers["Authorization"] = `Bearer ${auth.token}`;
+  if (auth.cookie) headers["Cookie"] = auth.cookie;
+  const body: any = { query };
+  if (variables) body.variables = variables;
   const res = await fetch(`${baseUrl}/graphql`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`,
-      "User-Agent": "affine-mcp-server/1.5.0",
-    },
-    body: JSON.stringify({ query }),
+    headers,
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json() as any;
   if (json.errors) throw new Error(json.errors.map((e: any) => e.message).join("; "));
   return json.data;
+}
+
+async function detectWorkspace(baseUrl: string, auth: { token?: string; cookie?: string }): Promise<string> {
+  console.error("Detecting workspaces...");
+  try {
+    const data = await gql(baseUrl, auth, `query {
+      workspaces {
+        id createdAt memberCount
+        owner { name }
+      }
+    }`);
+    const workspaces: any[] = data.workspaces;
+    if (workspaces.length === 0) {
+      console.error("  No workspaces found.");
+      return "";
+    }
+    const formatWs = (w: any) => {
+      const owner = w.owner?.name || "unknown";
+      const members = w.memberCount ?? 0;
+      const date = w.createdAt ? new Date(w.createdAt).toLocaleDateString() : "";
+      const membersStr = members === 1 ? "1 member" : `${members} members`;
+      return `${w.id}  (by ${owner}, ${membersStr}, ${date})`;
+    };
+    if (workspaces.length === 1) {
+      console.error(`  Found 1 workspace: ${formatWs(workspaces[0])}`);
+      console.error("  Auto-selected.");
+      return workspaces[0].id;
+    }
+    console.error(`  Found ${workspaces.length} workspaces:`);
+    workspaces.forEach((w, i) => console.error(`    ${i + 1}) ${formatWs(w)}`));
+    const choice = (await ask(`\nSelect [1]: `)) || "1";
+    const id = workspaces[parseInt(choice, 10) - 1]?.id || "";
+    if (!id) {
+      console.error("Invalid selection.");
+      process.exit(1);
+    }
+    return id;
+  } catch (err: any) {
+    console.error(`  Could not list workspaces: ${err.message}`);
+    return "";
+  }
+}
+
+async function loginWithEmail(baseUrl: string): Promise<{ token: string; workspaceId: string }> {
+  const email = await ask("Email: ");
+  const password = await ask("Password: ", true);
+  if (!email || !password) {
+    console.error("Email and password are required. Aborting.");
+    process.exit(1);
+  }
+
+  console.error("Signing in...");
+  let cookieHeader: string;
+  try {
+    ({ cookieHeader } = await loginWithPassword(baseUrl, email, password));
+  } catch (err: any) {
+    console.error(`✗ Sign-in failed: ${err.message}`);
+    process.exit(1);
+  }
+
+  // Verify identity
+  const auth = { cookie: cookieHeader };
+  try {
+    const data = await gql(baseUrl, auth, "query { currentUser { name email } }");
+    console.error(`✓ Signed in as: ${data.currentUser.name} <${data.currentUser.email}>\n`);
+  } catch (err: any) {
+    console.error(`✗ Session verification failed: ${err.message}`);
+    process.exit(1);
+  }
+
+  // Auto-generate an API token so the MCP server can use token auth (no cookie expiry issues)
+  console.error("Generating API token...");
+  let token: string;
+  try {
+    const data = await gql(baseUrl, auth,
+      `mutation($input: GenerateAccessTokenInput!) { generateUserAccessToken(input: $input) { id name token } }`,
+      { input: { name: `affine-mcp-${new Date().toISOString().slice(0, 10)}` } }
+    );
+    token = data.generateUserAccessToken.token;
+    console.error(`✓ Created token: ${token.slice(0, 10)}... (name: ${data.generateUserAccessToken.name})\n`);
+  } catch (err: any) {
+    console.error(`✗ Failed to generate token: ${err.message}`);
+    console.error("You can create one manually in Affine Settings → Integrations → MCP Server");
+    process.exit(1);
+  }
+
+  const workspaceId = await detectWorkspace(baseUrl, { token });
+  return { token, workspaceId };
+}
+
+async function loginWithToken(baseUrl: string): Promise<{ token: string; workspaceId: string }> {
+  console.error("\nTo generate a token:");
+  console.error(`  1. Open ${baseUrl}/settings in your browser`);
+  console.error("  2. Account Settings → Integrations → MCP Server");
+  console.error("  3. Copy the Personal access token\n");
+
+  const token = await ask("API token: ", true);
+  if (!token) {
+    console.error("No token provided. Aborting.");
+    process.exit(1);
+  }
+
+  console.error("Testing connection...");
+  try {
+    const data = await gql(baseUrl, { token }, "query { currentUser { name email } }");
+    console.error(`✓ Authenticated as: ${data.currentUser.name} <${data.currentUser.email}>\n`);
+  } catch (err: any) {
+    console.error(`✗ Authentication failed: ${err.message}`);
+    process.exit(1);
+  }
+
+  const workspaceId = await detectWorkspace(baseUrl, { token });
+  return { token, workspaceId };
 }
 
 async function login() {
@@ -65,69 +183,18 @@ async function login() {
   const defaultUrl = "https://app.affine.pro";
   const baseUrl = (await ask(`Affine URL [${defaultUrl}]: `)) || defaultUrl;
 
-  console.error("\nTo generate a token:");
-  console.error(`  1. Open ${baseUrl}/settings in your browser`);
-  console.error("  2. Account Settings → Integrations → MCP Server");
-  console.error("  3. Copy the Personal access token\n");
-
-  const token = await ask("API token: ", true);
-  if (!token) {
-    console.error("No token provided. Aborting.");
-    process.exit(1);
-  }
-
-  console.error("Testing connection...");
-  try {
-    const data = await gql(baseUrl, token, "query { currentUser { name email } }");
-    console.error(`✓ Authenticated as: ${data.currentUser.name} <${data.currentUser.email}>\n`);
-  } catch (err: any) {
-    console.error(`✗ Authentication failed: ${err.message}`);
-    process.exit(1);
-  }
-
-  console.error("Detecting workspaces...");
-  let workspaceId = "";
-  try {
-    const data = await gql(baseUrl, token, `query {
-      workspaces {
-        id createdAt memberCount
-        owner { name }
-      }
-    }`);
-    const workspaces: any[] = data.workspaces;
-    if (workspaces.length === 0) {
-      console.error("  No workspaces found.");
-    } else {
-      const formatWs = (w: any) => {
-        const owner = w.owner?.name || "unknown";
-        const members = w.memberCount ?? 0;
-        const date = w.createdAt ? new Date(w.createdAt).toLocaleDateString() : "";
-        const membersStr = members === 1 ? "1 member" : `${members} members`;
-        return `${w.id}  (by ${owner}, ${membersStr}, ${date})`;
-      };
-      if (workspaces.length === 1) {
-        workspaceId = workspaces[0].id;
-        console.error(`  Found 1 workspace: ${formatWs(workspaces[0])}`);
-        console.error("  Auto-selected.");
-      } else {
-        console.error(`  Found ${workspaces.length} workspaces:`);
-        workspaces.forEach((w, i) => console.error(`    ${i + 1}) ${formatWs(w)}`));
-        const choice = (await ask(`\nSelect [1]: `)) || "1";
-        workspaceId = workspaces[parseInt(choice, 10) - 1]?.id || "";
-        if (!workspaceId) {
-          console.error("Invalid selection.");
-          process.exit(1);
-        }
-      }
-    }
-  } catch (err: any) {
-    console.error(`  Could not list workspaces: ${err.message}`);
+  const method = await ask("\nAuth method — [1] Email/password (recommended)  [2] Paste API token: ");
+  let result: { token: string; workspaceId: string };
+  if (method === "2") {
+    result = await loginWithToken(baseUrl);
+  } else {
+    result = await loginWithEmail(baseUrl);
   }
 
   writeConfigFile({
     AFFINE_BASE_URL: baseUrl,
-    AFFINE_API_TOKEN: token,
-    AFFINE_WORKSPACE_ID: workspaceId,
+    AFFINE_API_TOKEN: result.token,
+    AFFINE_WORKSPACE_ID: result.workspaceId,
   });
 
   console.error(`\n✓ Saved to ${CONFIG_FILE} (mode 600)`);
@@ -148,7 +215,7 @@ async function status() {
   try {
     const data = await gql(
       config.AFFINE_BASE_URL || "https://app.affine.pro",
-      config.AFFINE_API_TOKEN,
+      { token: config.AFFINE_API_TOKEN },
       "query { currentUser { name email } workspaces { id } }"
     );
     console.error(`User: ${data.currentUser.name} <${data.currentUser.email}>`);
