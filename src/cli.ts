@@ -92,7 +92,6 @@ async function login() {
       workspaces {
         id createdAt memberCount
         owner { name }
-        docs(first: 0) { totalCount }
       }
     }`);
     const workspaces: any[] = data.workspaces;
@@ -101,9 +100,10 @@ async function login() {
     } else {
       const formatWs = (w: any) => {
         const owner = w.owner?.name || "unknown";
-        const docs = w.docs?.totalCount ?? "?";
+        const members = w.memberCount ?? 0;
         const date = w.createdAt ? new Date(w.createdAt).toLocaleDateString() : "";
-        return `${w.id}  (${docs} docs, by ${owner}, ${date})`;
+        const membersStr = members === 1 ? "1 member" : `${members} members`;
+        return `${w.id}  (by ${owner}, ${membersStr}, ${date})`;
       };
       if (workspaces.length === 1) {
         workspaceId = workspaces[0].id;
