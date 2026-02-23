@@ -5,11 +5,14 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
+import { assertLocal } from './tests/e2e-guard.mjs';
+
 const MCP_SERVER_PATH = './dist/index.js';
 const BASE_URL = process.env.AFFINE_BASE_URL || 'http://localhost:3010';
 const EMAIL = process.env.AFFINE_EMAIL || 'dev@affine.pro';
 const PASSWORD = process.env.AFFINE_PASSWORD || 'dev';
 const LOGIN_MODE = process.env.AFFINE_LOGIN_AT_START || 'sync';
+assertLocal(BASE_URL);
 const TOOL_TIMEOUT_MS = Number(process.env.MCP_TOOL_TIMEOUT_MS || '60000');
 const MANIFEST_PATH = path.join(process.cwd(), 'tool-manifest.json');
 const EXPECTED_TOOLS = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8')).tools;
@@ -326,7 +329,6 @@ class ComprehensiveRunner {
       generatedAt: new Date().toISOString(),
       server: {
         baseUrl: BASE_URL,
-        email: EMAIL,
       },
       tools: {
         listed: this.serverTools.length,

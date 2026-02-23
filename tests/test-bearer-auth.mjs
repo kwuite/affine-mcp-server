@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
+import { assertLocal } from './e2e-guard.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MCP_SERVER_PATH = path.resolve(__dirname, '..', 'dist', 'index.js');
 const STATE_OUTPUT_PATH = path.resolve(__dirname, 'test-bearer-state.json');
@@ -23,6 +25,7 @@ const BASE_URL = process.env.AFFINE_BASE_URL || 'http://localhost:3010';
 const EMAIL = process.env.AFFINE_ADMIN_EMAIL || process.env.AFFINE_EMAIL || 'test@affine.local';
 const PASSWORD = process.env.AFFINE_ADMIN_PASSWORD || process.env.AFFINE_PASSWORD;
 if (!PASSWORD) throw new Error('AFFINE_ADMIN_PASSWORD env var required — run: . tests/generate-test-env.sh');
+assertLocal(BASE_URL);
 const TOOL_TIMEOUT_MS = Number(process.env.MCP_TOOL_TIMEOUT_MS || '60000');
 
 function parseContent(result) {
